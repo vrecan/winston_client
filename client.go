@@ -54,12 +54,30 @@ func main() {
 	}
 	defer conn.Close()
 	client := pb.NewV1Client(conn)
-
-	go runPush(client)
+	setupRepo(client)
+	go func() {
+		for {
+			runPush(client)
+			// time.Sleep(2 * time.Second)
+		}
+	}()
 
 	death.WaitForDeath()
 	log.Info("shutdown")
 }
+
+func setupRepo(client pb.V1Client) {
+	_, err := client.UpsertRepo(context.Background(), &pb.RepoSettings{
+		Repo:      "name0",
+		Format:    pb.RepoSettings_JSON,
+		DateField: "normalDate",
+		HashField: "id",
+		Buckets:   8})
+	if err != nil {
+		panic(fmt.Sprintf("Failed to setup repo: %v", err))
+	}
+}
+
 func runPush(client pb.V1Client) {
 	// stream, err := client.Push(context.Background())
 	// if err != nil {
@@ -67,37 +85,54 @@ func runPush(client pb.V1Client) {
 	// }
 	now := time.Now()
 	cnt := 0
+	bulkCnt := 2000
 	for {
 
-		data := MakeRequests(100000)
+		data := MakeRequests(500, bulkCnt)
 
 		stream, err := client.Push(context.Background())
 		if err != nil {
 			log.Error("Failed to push stream to context background: ", err)
+			return
 		}
 
 		for _, note := range data {
 			if err := stream.Send(note); err != nil {
-				log.Critical("Failed to send a data: %v", err)
+				log.Error("stream send: ", err)
+				return
 			}
 			cnt++
 		}
-		stream.CloseAndRecv()
+		_, err = stream.CloseAndRecv()
+		if err != nil {
+			log.Error("Transaction failed for stream: ", err)
+			return
+		}
 
-		if cnt >= 100000 {
+		if cnt*bulkCnt >= 100000 {
 			break
 		}
 	}
 
 	duration := time.Since(now)
-	log.Info(cnt, " messages in ", duration)
+	log.Info(cnt*bulkCnt, " messages in ", duration)
 
 }
 
-func MakeRequests(cnt int) []*pb.PushRequest {
+func MakeRequests(cnt int, batchCnt int) []*pb.PushRequest {
 	data := make([]*pb.PushRequest, 0)
+
 	for i := 0; i < cnt; i++ {
-		data = append(data, &pb.PushRequest{Repo: "name0", Data: []byte(fmt.Sprintf("{ \"id\": \"%s\" woo this thing is a bunch of extra data that we ddin't have in the thingy magiger bob before. But we do now don't we bob.", uuid.NewV4())), Buckets: 0})
+		pr := &pb.PushRequest{
+			Repo: "name0",
+		}
+		for bc := 0; bc < batchCnt; bc++ {
+			row := &pb.Row{
+				Data: []byte(fmt.Sprintf("{ \"id\": \"%s\" woo this thing is a bunch of extra data that we ddin't have in the thingy magiger bob before. But we do now don't we bob.", uuid.NewV4())),
+			}
+			pr.Rows = append(pr.Rows, row)
+		}
+		data = append(data, pr)
 	}
 	return data
 }
