@@ -58,9 +58,11 @@ func main() {
 	go func() {
 		for {
 			runPush(client)
-			// time.Sleep(2 * time.Second)
+			// runPullBucket(client)
+			time.Sleep(2 * time.Second)
 		}
 	}()
+
 
 	death.WaitForDeath()
 	log.Info("shutdown")
@@ -76,6 +78,17 @@ func setupRepo(client pb.V1Client) {
 	if err != nil {
 		panic(fmt.Sprintf("Failed to setup repo: %v", err))
 	}
+}
+
+func runPullBucket(client pb.V1Client) {
+	t := time.Now()
+	pull := pb.PullBucket{
+		Repo: "name0",
+		StartTime: uint64(t.Add(-240 *time.Hour).UnixNano()),
+		EndTime: uint64(t.UnixNano()),
+		BucketPath: "09-11-2016/0.blt",
+	}
+	client.PullBucketByTime(pull)
 }
 
 func runPush(client pb.V1Client) {
@@ -128,6 +141,7 @@ func MakeRequests(cnt int, batchCnt int) []*pb.PushRequest {
 		}
 		for bc := 0; bc < batchCnt; bc++ {
 			row := &pb.Row{
+				Time: uint64(time.Now().UnixNano()),
 				Data: []byte(fmt.Sprintf("{ \"id\": \"%s\" woo this thing is a bunch of extra data that we ddin't have in the thingy magiger bob before. But we do now don't we bob.", uuid.NewV4())),
 			}
 			pr.Rows = append(pr.Rows, row)
