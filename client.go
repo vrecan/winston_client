@@ -9,8 +9,8 @@ import (
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/grpclog"
+	"io"
 	"time"
-	// "io"
 	// "net"
 	SYS "syscall"
 )
@@ -58,11 +58,10 @@ func main() {
 	go func() {
 		for {
 			runPush(client)
-			// runPullBucket(client)
-			time.Sleep(2 * time.Second)
+			runPullBucket(client)
+			// time.Sleep(2 * time.Second)
 		}
 	}()
-
 
 	death.WaitForDeath()
 	log.Info("shutdown")
@@ -70,11 +69,11 @@ func main() {
 
 func setupRepo(client pb.V1Client) {
 	_, err := client.UpsertRepo(context.Background(), &pb.RepoSettings{
-		Repo:      "name0",
-		Format:    pb.RepoSettings_JSON,
-		DateField: "normalDate",
-		HashField: "id",
-		Buckets:   8})
+		Repo:           "name0",
+		Format:         pb.RepoSettings_JSON,
+		TimeField:      "normalDate",
+		GroupByFields:  []string{0: "id"},
+		GroupByBuckets: 8})
 	if err != nil {
 		panic(fmt.Sprintf("Failed to setup repo: %v", err))
 	}
@@ -82,13 +81,35 @@ func setupRepo(client pb.V1Client) {
 
 func runPullBucket(client pb.V1Client) {
 	t := time.Now()
-	pull := pb.PullBucket{
-		Repo: "name0",
-		StartTime: uint64(t.Add(-240 *time.Hour).UnixNano()),
-		EndTime: uint64(t.UnixNano()),
-		BucketPath: "09-11-2016/0.blt",
+	pull := pb.ReadBucket{
+		Repo:        "name0",
+		StartTimeMs: uint64(t.Add(-240*time.Hour).UnixNano() / int64(time.Millisecond)),
+		EndTimeMs:   uint64(t.UnixNano() / int64(time.Millisecond)),
+		BucketPath:  "09-13-2016/0.blt",
 	}
-	client.PullBucketByTime(pull)
+	stream, err := client.ReadBucketByTime(context.Background(), &pull)
+	if err != nil {
+		log.Error("Failed to get stream from pullBucketByTime: ", err)
+		return
+	}
+	cnt := 0
+	rcds := 0
+	for {
+		resp, err := stream.Recv()
+		if err == io.EOF {
+			duration := time.Since(t)
+			log.Info("msgs rcvd: ", cnt, " ", duration)
+			log.Info("rcds rcvd: ", rcds, " ", duration)
+			return
+		}
+		if err != nil {
+			log.Error("Failed to read row from winston: ", err, " resp: ", resp)
+			return
+		}
+		rcds += len(resp.Rows)
+		cnt++
+	}
+
 }
 
 func runPush(client pb.V1Client) {
@@ -103,7 +124,7 @@ func runPush(client pb.V1Client) {
 
 		data := MakeRequests(500, bulkCnt)
 
-		stream, err := client.Push(context.Background())
+		stream, err := client.Write(context.Background())
 		if err != nil {
 			log.Error("Failed to push stream to context background: ", err)
 			return
@@ -111,7 +132,7 @@ func runPush(client pb.V1Client) {
 
 		for _, note := range data {
 			if err := stream.Send(note); err != nil {
-				log.Error("stream send: ", err)
+				log.Error("write stream send: ", err)
 				return
 			}
 			cnt++
@@ -132,17 +153,16 @@ func runPush(client pb.V1Client) {
 
 }
 
-func MakeRequests(cnt int, batchCnt int) []*pb.PushRequest {
-	data := make([]*pb.PushRequest, 0)
+func MakeRequests(cnt int, batchCnt int) []*pb.WriteRequest {
+	data := make([]*pb.WriteRequest, 0)
 
 	for i := 0; i < cnt; i++ {
-		pr := &pb.PushRequest{
+		pr := &pb.WriteRequest{
 			Repo: "name0",
 		}
 		for bc := 0; bc < batchCnt; bc++ {
 			row := &pb.Row{
-				Time: uint64(time.Now().UnixNano()),
-				Data: []byte(fmt.Sprintf("{ \"id\": \"%s\" woo this thing is a bunch of extra data that we ddin't have in the thingy magiger bob before. But we do now don't we bob.", uuid.NewV4())),
+				Data: []byte(fmt.Sprintf("{ \"id\": \"%s\", \"normalDate\": \"%s\",  \"woo\" : \"this thing\", \"is\": \"a bunch of extra data that we ddin't have in the thingy magiger bob before. But we do now don't we bob.\"}", uuid.NewV4(), time.Now().Format(time.RFC3339))),
 			}
 			pr.Rows = append(pr.Rows, row)
 		}
