@@ -55,16 +55,60 @@ func main() {
 	defer conn.Close()
 	client := pb.NewV1Client(conn)
 	setupRepo(client)
+
 	go func() {
 		for {
-			runPush(client)
-			runPullBucket(client)
-			// time.Sleep(2 * time.Second)
+			// runPush(client)
+			runPullBuckets(client)
+			
+			time.Sleep(2 * time.Second)
 		}
 	}()
+	// go func() {
+	// 	for {
+	// 		runPush(client)
+	// 		time.Sleep(2 * time.Second)
+	// 	}
+	// }()
+
+	// go func() {
+	// 	for {
+	// 		runPullBuckets(client)
+	// 		time.Sleep(2 * time.Second)
+	// 	}
+	// }()
+	// go func() {
+	// 	for {
+	// 		runPullBuckets(client)
+	// 		time.Sleep(2 * time.Second)
+	// 	}
+	// }()
 
 	death.WaitForDeath()
 	log.Info("shutdown")
+}
+
+func getBuckets(client pb.V1Client) []string {
+	stream, err := client.GetBuckets(context.Background(), &pb.BucketsRequest{
+		Repo:        "name0",
+		StartTimeMs: uint64(time.Now().Add(-72*time.Hour).UnixNano() / int64(time.Millisecond)),
+		EndTimeMs:   uint64(time.Now().UnixNano() / int64(time.Millisecond)),
+	})
+	if err != nil {
+		log.Error("get buckets: ", err)
+	}
+	buckets := []string{}
+	for {
+		in, err := stream.Recv()
+		if err == io.EOF {
+			log.Info("Finished getting buckets")
+			return buckets
+		}
+		log.Info("BUCKET RECV: ", in)
+		buckets = append(buckets, in.Path)
+
+	}
+	return buckets
 }
 
 func setupRepo(client pb.V1Client) {
@@ -79,35 +123,41 @@ func setupRepo(client pb.V1Client) {
 	}
 }
 
-func runPullBucket(client pb.V1Client) {
-	t := time.Now()
-	pull := pb.ReadBucket{
-		Repo:        "name0",
-		StartTimeMs: uint64(t.Add(-240*time.Hour).UnixNano() / int64(time.Millisecond)),
-		EndTimeMs:   uint64(t.UnixNano() / int64(time.Millisecond)),
-		BucketPath:  "09-13-2016/0.blt",
-	}
-	stream, err := client.ReadBucketByTime(context.Background(), &pull)
-	if err != nil {
-		log.Error("Failed to get stream from pullBucketByTime: ", err)
-		return
-	}
-	cnt := 0
-	rcds := 0
-	for {
-		resp, err := stream.Recv()
-		if err == io.EOF {
-			duration := time.Since(t)
-			log.Info("msgs rcvd: ", cnt, " ", duration)
-			log.Info("rcds rcvd: ", rcds, " ", duration)
-			return
-		}
-		if err != nil {
-			log.Error("Failed to read row from winston: ", err, " resp: ", resp)
-			return
-		}
-		rcds += len(resp.Rows)
-		cnt++
+func runPullBuckets(client pb.V1Client) {
+	buckets := getBuckets(client)
+	
+	for _, b := range buckets {
+		t := time.Now()
+		func() {
+			pull := pb.ReadBucket{
+				Repo:        "name0",
+				StartTimeMs: uint64(t.Add(-24*time.Hour).UnixNano() / int64(time.Millisecond)),
+				EndTimeMs:   uint64(t.UnixNano() / int64(time.Millisecond)),
+				BucketPath:  b,
+			}
+			stream, err := client.ReadBucketByTime(context.Background(), &pull)
+			if err != nil {
+				log.Error("Failed to get stream from pullBucketByTime: ", err)
+				return
+			}
+			cnt := 0
+			rcds := 0
+			for {
+				resp, err := stream.Recv()
+				if err == io.EOF {
+					duration := time.Since(t)
+					log.Info("msgs rcvd: ", cnt, " ", duration, " bucket: ", b)
+					log.Info("rcds rcvd: ", rcds, " ", duration, " bucket: ", b)
+					return
+				}
+				if err != nil {
+					log.Error("Failed to read row from winston: ", err, " resp: ", resp)
+					return
+				}
+				rcds += len(resp.Rows)
+				cnt++
+			}
+		}()
 	}
 
 }
@@ -122,7 +172,7 @@ func runPush(client pb.V1Client) {
 	bulkCnt := 2000
 	for {
 
-		data := MakeRequests(500, bulkCnt)
+		data := MakeRequests(50, bulkCnt)
 
 		stream, err := client.Write(context.Background())
 		if err != nil {
