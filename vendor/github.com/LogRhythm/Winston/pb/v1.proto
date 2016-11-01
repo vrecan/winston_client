@@ -1,0 +1,92 @@
+syntax = "proto3";
+package winston;
+
+import "github.com/gogo/protobuf/gogoproto/gogo.proto";
+
+option (gogoproto.marshaler_all) = true;
+option (gogoproto.sizer_all) = true;
+option (gogoproto.unmarshaler_all) = true;
+option (gogoproto.goproto_getters_all) = false;
+
+service V1 {
+  rpc UpsertRepo(RepoSettings) returns (EMPTY){}
+  rpc _UpdateRepoCache(RepoSettings) returns (EMPTY){}
+  
+  rpc Write(stream WriteRequest) returns (EMPTY){}
+  rpc _WritePartition(stream WritePartitionRequest) returns (stream EMPTY){}
+
+  rpc GetPartitions(PartitionsRequest) returns (stream Partition){}
+  rpc _QueryPartition(QueryPartition) returns (stream QueryResponse){}
+  rpc QueryAll(Query) returns (stream QueryResponse){}
+
+  rpc GetRepoSettings(RepoRequest) returns (RepoSettings){}
+}
+
+message RepoRequest {
+	string repo = 1;
+}
+
+message QueryPartition {
+	string repo = 1;
+	string startTime = 2;
+	string endTime = 3;
+	string partitionPath = 4;
+	int32 batchSize = 5;
+}
+
+message Query {
+	string repo = 1;
+	string startTime = 2;
+	string endTime = 3;
+	int32 batchSize = 4;
+}
+
+message QueryResponse {
+	string repo = 1;
+	repeated Row rows = 2;
+}
+
+message PartitionsRequest {
+	string repo = 1;
+	string startTime = 2;
+	string endTime = 3;
+}
+
+message Partition {
+	string path = 1;
+}
+
+message RepoSettings {
+	string repo = 1;
+	Format format = 2;
+	string timeField = 3;
+	repeated string groupByFields = 4;
+	int32 groupByPartitions = 5;
+
+    enum Format {
+		RAW  = 0;
+		JSON = 1;
+	}
+}
+
+message WriteRequest {
+	string repo = 1;
+	repeated Row rows = 2;
+}
+
+message WritePartitionRequest {
+	string repo = 1;
+	int32 partition = 2;
+	string Time = 3;
+	repeated Row rows = 4;
+	bool transactionDone = 5;
+}
+
+message Row {
+	bytes data = 2;
+	int64 timeNano = 3;
+}
+
+message EMPTY {	
+}
+

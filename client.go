@@ -4,6 +4,7 @@ import (
 	"fmt"
 	CLI "github.com/LogRhythm/Winston/client"
 	pb "github.com/LogRhythm/Winston/pb"
+	"github.com/Pallinder/go-randomdata"
 	log "github.com/cihub/seelog"
 	uuid "github.com/satori/go.uuid"
 	"github.com/vrecan/death"
@@ -13,7 +14,7 @@ import (
 	"io"
 	"time"
 	// "net"
-	// "sync"
+	"sync"
 	SYS "syscall"
 )
 
@@ -61,87 +62,6 @@ func main() {
 	// client := pb.NewV1Client(conn)
 	// setupRepo(client)
 
-	// go func() {
-	// 	for {
-	// 		err := runPush(client)
-	// 		if err != nil {
-	// 			log.Error("Failed to push sleeping")
-	// 			time.Sleep(2 * time.Second)
-	// 		}
-	// 		// return
-	// 	}
-	// }()
-	// go func() {
-	// 	for {
-	// 		err := runPush(client)
-	// 		if err != nil {
-	// 			log.Error("Failed to push sleeping")
-	// 			time.Sleep(2 * time.Second)
-	// 		}
-
-	// 	}
-	// }()
-
-	// go func() {
-	// 	for {
-	// 		err := runPush(client)
-	// 		if err != nil {
-	// 			log.Error("Failed to push sleeping")
-	// 			time.Sleep(2 * time.Second)
-	// 		}
-	// 	}
-	// }()
-
-	// go func() {
-	// 	for {
-	// 		err := runPush(client)
-	// 		if err != nil {
-	// 			log.Error("Failed to push sleeping")
-	// 			time.Sleep(2 * time.Second)
-	// 		}
-	// 	}
-	// }()
-	// go func() {
-	// 	for {
-	// 		err := runPush(client)
-	// 		if err != nil {
-	// 			log.Error("Failed to push sleeping")
-	// 			time.Sleep(2 * time.Second)
-	// 		}
-
-	// 	}
-	// }()
-
-	// go func() {
-	// 	for {
-	// 		err := runPush(client)
-	// 		if err != nil {
-	// 			log.Error("Failed to push sleeping")
-	// 			time.Sleep(2 * time.Second)
-	// 		}
-	// 	}
-	// }()
-
-	// go func() {
-	// 	for {
-	// 		err := runPush(client)
-	// 		if err != nil {
-	// 			log.Error("Failed to push sleeping")
-	// 			time.Sleep(2 * time.Second)
-	// 		}
-	// 	}
-	// }()
-	// go func() {
-	// 	for {
-	// 		err := runPush(client)
-	// 		if err != nil {
-	// 			log.Error("Failed to push sleeping")
-	// 			time.Sleep(2 * time.Second)
-	// 		}
-
-	// 	}
-	// }()
-
 	go func() {
 		for {
 			err := runPushCliV2()
@@ -170,32 +90,79 @@ func main() {
 	// 	}
 	// }()
 
+	go func() {
+
+		for {
+
+			start := time.Now().Add(-720 * time.Hour)
+			end := time.Now()
+			repo := "name0"
+			partitions, err := getPartitions(repo, start, end)
+			if err != nil {
+				log.Error("getPartitions: ", err)
+				time.Sleep(2 * time.Second)
+				continue
+			}
+
+			wg := &sync.WaitGroup{}
+			for _, path := range partitions {
+
+				wg.Add(1)
+				go func(partitionPath string) {
+					cli := CLI.NewClient()
+					defer wg.Done()
+					t := time.Now()
+					it := time.Now()
+					c, err := cli.QueryPartition(pb.QueryPartition{
+						Repo:          repo,
+						StartTime:     start.Format(time.RFC3339),
+						EndTime:       end.Format(time.RFC3339),
+						PartitionPath: partitionPath,
+						BatchSize:     50,
+					}, 10)
+					if err != nil {
+						log.Error("QueryPartitions: ", err)
+						time.Sleep(2 * time.Second)
+						return
+					}
+					cnt := 0
+					rcds := 0
+					sampRcds := 0
+					for r := range c {
+						if r.Err != nil {
+							log.Error("query error: ", r.Err)
+							continue
+						}
+						rcds += len(r.R)
+						sampRcds += len(r.R)
+						if cnt%100 == 0 {
+							if len(r.R) > 20 {
+								log.Info("0: ", string(r.R[0]))
+								log.Info("10: ", string(r.R[10]))
+								duration := time.Since(it)
+								log.Info("read rate/s: ", float64(sampRcds)/duration.Seconds())
+								it = time.Now()
+								sampRcds = 0
+							}
+						}
+						cnt++
+					}
+					duration := time.Since(t)
+					log.Info("read msgs: ", cnt, " rcds: ", rcds, " took: ", duration)
+				}(path)
+			}
+			wg.Wait()
+
+		}
+	}()
+
 	death.WaitForDeath()
 	log.Info("shutdown")
 }
 
-func getBuckets(client pb.V1Client) []string {
-	stream, err := client.GetPartitions(context.Background(), &pb.PartitionsRequest{
-		Repo:      "name0",
-		StartTime: time.Now().Add(-720 * time.Hour).Format(time.RFC3339),
-		EndTime:   time.Now().Format(time.RFC3339),
-	})
-	if err != nil {
-		log.Error("get buckets: ", err)
-		return []string{}
-	}
-	partitions := []string{}
-	for {
-		in, err := stream.Recv()
-		if err == io.EOF {
-			log.Info("Finished getting buckets")
-			return partitions
-		}
-		log.Info("PARTITIONS: ", in)
-		partitions = append(partitions, in.Path)
-
-	}
-	return partitions
+func getPartitions(repo string, startDate, endDate time.Time) ([]string, error) {
+	cli := CLI.NewClient()
+	return cli.GetPartitions(repo, startDate, endDate)
 }
 
 func setupRepo() {
@@ -246,7 +213,7 @@ func QueryByTime() {
 				log.Info("0: ", string(r.R[0]))
 				log.Info("10: ", string(r.R[10]))
 				duration := time.Since(it)
-				log.Info("read rate/s: ", float64(sampRcds)/duration.Seconds())
+				log.Info("query all read rate/s: ", float64(sampRcds)/duration.Seconds())
 				it = time.Now()
 				sampRcds = 0
 			}
@@ -254,7 +221,7 @@ func QueryByTime() {
 		cnt++
 	}
 	duration := time.Since(t)
-	log.Info("msgs: ", cnt, " rcds: ", rcds, " took: ", duration)
+	log.Info("query all msgs: ", cnt, " rcds: ", rcds, " took: ", duration)
 }
 
 func runPullBuckets(client pb.V1Client) {
@@ -264,7 +231,7 @@ func runPullBuckets(client pb.V1Client) {
 		Repo:      "name0",
 		StartTime: t.Add(-720 * time.Hour).Format(time.RFC3339),
 		EndTime:   t.Format(time.RFC3339),
-		BatchSize: 1,
+		BatchSize: 10,
 	}
 
 	stream, err := client.QueryAll(context.Background(), &pull)
@@ -288,7 +255,7 @@ func runPullBuckets(client pb.V1Client) {
 		}
 		rcds += len(resp.Rows)
 		sampRcds += len(resp.Rows)
-		if cnt%100 == 0 {
+		if cnt%200 == 0 {
 			if len(resp.Rows) > 20 {
 				log.Info("0: ", resp.Rows[0])
 				log.Info("10: ", resp.Rows[10])
@@ -309,8 +276,8 @@ func runPushCliV2() error {
 	defer cli.Close()
 	now := time.Now()
 	cnt := 5000
-	msgs := makeSlicesOfBytes(cnt)
-	err := cli.WriteV2("name0", msgs)
+	msgs := randomJson(cnt)
+	err := cli.Write("name0", msgs)
 	if err != nil {
 		log.Error("Failed to write: ", err)
 		return err
@@ -379,6 +346,15 @@ func makeSlicesOfBytes(batchCnt int) [][]byte {
 	s := make([][]byte, batchCnt)
 	for bc := 0; bc < batchCnt; bc++ {
 		s[bc] = []byte(fmt.Sprintf("{ \"id\": \"%s\", \"normalDate\": \"%s\", \"commonEventId\":1021382,\"count\":1,\"direction\":2,\"domain\":\"SECIOUS\",\"entityId\":29,\"impactedEntityId\":29,\"impactedHostId\":175,\"insertedDate\":\"2016-10-07T15:54:46.1812332Z\",\"impactedIp\":\"10.128.64.155\",\"originIp\":\"10.110.0.63\",\"impactedLocationKey\":\"USCO:boulder\",\"logDate\":\"2016-10-07T08:57:19.5871955\",\"login\":\"chris.martin\",\"logSequence\":5973700,\"logSourceId\":924,\"mediatorSessionId\":134158,\"mpeRuleId\":1080954,\"msgClassId\":1060,\"msgSourceTypeId\":1000030,\"impactedName\":\"usbo1pprint01.schq.secious.com\",\"impactedNetworkId\":26,\"normalDate\":\"2016-10-07T14:57:19.7191955Z\",\"object\":\"\\\\\\\\*\\\\IPC$\",\"objectName\":\"spoolss\",\"originPort\":54562,\"priority\":22,\"rootEntityId\":1,\"session\":\"0x6a857adc\",\"severity\":\"Information\",\"vendorMessageId\":\"5145\",\"impactedZoneEnum\":1,\"originZoneEnum\":1,\"impactedGeoPoint\":{\"lat\":39.95960998535156,\"lon\":-105.51024627685547},\"resolvedOriginName\":\"94aeee81-8794-4c31-5ea1-b5b95aec1e6f\",\"resolvedImpactedName\":\"1fae203f-6745-430e-5a4a-61e44e30e288\",\"anonymizedLogin\":\"b7b986f64e2676ee41fc263c8b05a89ccce5a80e645a3a648048fd74e23d012b\",\"indexId\":\"24501ffb-824d-4c45-80c2-5f39ad70a783\",\"#companyName\":\"LogRhythm\"}", uuid.NewV4(), time.Now().Format(time.RFC3339)))
+	}
+	return s
+
+}
+
+func randomJson(batchCnt int) [][]byte {
+	s := make([][]byte, batchCnt)
+	for bc := 0; bc < batchCnt; bc++ {
+		s[bc] = []byte(fmt.Sprintf("{ \"id\": \"%s\", \"normalDate\": \"%s\", \"first\":\"%s\",\"last\":\"%s\",\"paragrapth\":2,\"domain\":\"SECIOUS\",\"entityId\":29,\"impactedEntityId\":29,\"impactedHostId\":175,\"insertedDate\":\"2016-10-07T15:54:46.1812332Z\",\"impactedIp\":\"10.128.64.155\",\"originIp\":\"10.110.0.63\",\"impactedLocationKey\":\"USCO:boulder\",\"logDate\":\"2016-10-07T08:57:19.5871955\",\"login\":\"chris.martin\",\"logSequence\":5973700,\"logSourceId\":924,\"mediatorSessionId\":134158,\"mpeRuleId\":1080954,\"msgClassId\":1060,\"msgSourceTypeId\":1000030,\"impactedName\":\"usbo1pprint01.schq.secious.com\",\"impactedNetworkId\":26,\"normalDate\":\"2016-10-07T14:57:19.7191955Z\",\"object\":\"\\\\\\\\*\\\\IPC$\",\"objectName\":\"spoolss\",\"originPort\":54562,\"priority\":22,\"rootEntityId\":1,\"session\":\"0x6a857adc\",\"severity\":\"Information\",\"vendorMessageId\":\"5145\",\"impactedZoneEnum\":1,\"originZoneEnum\":1,\"impactedGeoPoint\":{\"lat\":39.95960998535156,\"lon\":-105.51024627685547},\"resolvedOriginName\":\"94aeee81-8794-4c31-5ea1-b5b95aec1e6f\",\"resolvedImpactedName\":\"1fae203f-6745-430e-5a4a-61e44e30e288\",\"anonymizedLogin\":\"b7b986f64e2676ee41fc263c8b05a89ccce5a80e645a3a648048fd74e23d012b\",\"paragraph\":\"%s\",\"#companyName\":\"LogRhythm\"}", uuid.NewV4(), time.Now().Format(time.RFC3339), randomdata.FirstName(randomdata.RandomGender), randomdata.LastName(), randomdata.Paragraph()))
 	}
 	return s
 
